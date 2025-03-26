@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Deepgame - 打砖块</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            margin: 0;
+            min-height: 100vh;
+        }
+        #gameTitle {
+            font-family: Arial;
+            font-size: 36px;
+            color: #2c3e50;
+            margin: 20px 0;
+        }
+        .game-info {
+            font-family: Arial;
+            margin: 10px 0;
+            font-size: 18px;
+        }
+        canvas {
+            border: 2px solid #333;
+            box-shadow: 0 0 20px rgba(0,0,0,0.2);
+        }
+        #controlBtn {
+            margin: 20px;
+            padding: 10px 30px;
+            font-size: 18px;
+            cursor: pointer;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        #gameOverDialog {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.2);
+            text-align: center;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameTitle">Deepgame</div>
+    <div class="game-info">
+        关卡: <span id="level">1</span> | 
+        剩余砖块: <span id="bricksLeft">0</span>
+    </div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <button id="controlBtn">开始游戏</button>
+    <div id="gameOverDialog">
+        <h2>游戏结束！</h2>
+        <button onclick="restartGame()">重新开始</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let animationId;
+        
+        const gameState = {
+            level: 1,
+            paddle: {
+                x: canvas.width/2 - 50,
+                y: canvas.height - 20,
+                width: 100,
+                height: 10,
+                speed: 10
+            },
+            balls: [],
+            bricks: [],
+            powerups: [],
+            gameActive: false,
+            paused: true,
+            baseBallSpeed: 6
+        };
+
+        function initGame() {
+            gameState.balls = [{
+                x: canvas.width/2,
+                y: canvas.height - 50,
+                dx: 5 * (Math.random() > 0.5 ? 1 : -1),
+                dy: -5,
+                radius: 8
+            }];
+            gameState.powerups = [];
+            generateBricks();
+        }
+
+        function generateBricks() {
+            gameState.bricks = [];
+            const baseRows = 12;
+            const baseCols = 20;
+            const rows = baseRows + Math.floor(gameState.level/2);
+            const cols = baseCols + Math.floor(gameState.level/1.2);
+            const brickWidth = canvas.width / cols - 1;
+            const brickHeight = 10;
+
+            for(let i = 0; i < rows; i++) {
+                for(let j = 0; j < cols; j++) {
+                    if(Math.random() < 0.8) {
+                        gameState.bricks.push({
+                            x: j * (brickWidth + 1) + 0.5,
+                            y: i * (brickHeight + 3) + 50,
+                            width: brickWidth,
+                            height: brickHeight,
+                            color: `hsl(${Math.random()*360}, 60%, 50%)`,
+                            active: true
+                        });
+                    }
+                }
+            }
+            document.getElementById('bricksLeft').textContent = 
+                gameState.bricks.filter(b => b.active).length;
+        }
+
+        function generatePowerup(x, y) {
+            if(Math.random() < 0.2) {
+                const types = [3, 5, 10];
+                const type = types[Math.floor(Math.random()*types.length)];
+                gameState.powerups.push({
+                    x,
+                    y,
+                    type,
+                    size: 8,
+                    speed: 3
+                });
+            }
+        }
+
+        function activatePowerup(type) {
+            const activeBalls = gameState.balls.filter(b => b.y < canvas.height + b.radius);
+            if(activeBalls.length === 0) return;
+
+            const targetBall = activeBalls[Math.floor(Math.random()*activeBalls.length)];
+            const baseAngle = Math.atan2(targetBall.dy, targetBall.dx);
+            
+            const newBalls = [];
+            for(let i = 0; i < type; i++) {
+                const angle = baseAngle + (Math.PI*2*i)/type;
+                newBalls.push({
+                    x: targetBall.x,
+                    y: targetBall.y,
+                    dx: Math.cos(angle) * gameState.baseBallSpeed,
+                    dy: Math.sin(angle) * gameState.baseBallSpeed,
+                    radius: 8
+                });
+            }
+            gameState.balls = gameState.balls.concat(newBalls);
+        }
+
+        function checkCollision(ball) {
+            // 优化左右墙碰撞角度
+            if(ball.x + ball.dx > canvas.width - ball.radius || ball.x + ball.dx < ball.radius) {
+                ball.dx = -ball.dx * 0.8;
+                ball.dy *= 1.2;
+                
+                const speed = Math.sqrt(ball.dx**2 + ball.dy**2);
+                const ratio = gameState.baseBallSpeed / speed;
+                ball.dx *= ratio;
+                ball.dy *= ratio;
+            }
+
+            if(ball.y + ball.dy < ball.radius) {
+                ball.dy = -ball.dy;
+            }
+
+            if(ball.y + ball.dy > canvas.height - ball.radius - gameState.paddle.height &&
+               ball.x > gameState.paddle.x - ball.radius && 
+               ball.x < gameState.paddle.x + gameState.paddle.width + ball.radius) {
+                const speed = Math.sqrt(ball.dx**2 + ball.dy**2);
+                const ratio = gameState.baseBallSpeed / speed;
+                
+                ball.dy = -Math.abs(ball.dy * ratio);
+                ball.dx = ((ball.x - (gameState.paddle.x + gameState.paddle.width/2)) / 
+                          (gameState.paddle.width/2)) * gameState.baseBallSpeed;
+            }
+
+            let collisionDetected = false;
+            for(const brick of gameState.bricks) {
+                if(!brick.active) continue;
+                
+                const nextX = ball.x + ball.dx;
+                const nextY = ball.y + ball.dy;
+                
+                if(nextX + ball.radius > brick.x &&
+                   nextX - ball.radius < brick.x + brick.width &&
+                   nextY + ball.radius > brick.y &&
+                   nextY - ball.radius < brick.y + brick.height) {
+                    
+                    brick.active = false;
+                    document.getElementById('bricksLeft').textContent--;
+                    
+                    const overlapX = Math.abs(nextX - (brick.x + brick.width/2)) - brick.width/2;
+                    const overlapY = Math.abs(nextY - (brick.y + brick.height/2)) - brick.height/2;
+                    
+                    if(overlapX > overlapY) {
+                        ball.dx = -ball.dx;
+                    } else {
+                        ball.dy = -ball.dy;
+                    }
+                    
+                    generatePowerup(brick.x + brick.width/2, brick.y + brick.height/2);
+                    collisionDetected = true;
+                    break;
+                }
+            }
+            return collisionDetected;
+        }
+
+        function gameLoop() {
+            if(!gameState.gameActive || gameState.paused) {
+                cancelAnimationFrame(animationId);
+                return;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if(keys.ArrowLeft && gameState.paddle.x > 0) {
+                gameState.paddle.x -= gameState.paddle.speed;
+            }
+            if(keys.ArrowRight && gameState.paddle.x < canvas.width - gameState.paddle.width) {
+                gameState.paddle.x += gameState.paddle.speed;
+            }
+
+            gameState.balls.forEach((ball, index) => {
+                checkCollision(ball);
+                ball.x += ball.dx;
+                ball.y += ball.dy;
+
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI*2);
+                ctx.fillStyle = '#2c3e50';
+                ctx.fill();
+                ctx.closePath();
+
+                if(ball.y > canvas.height + ball.radius * 2) {
+                    gameState.balls.splice(index, 1);
+                    if(gameState.balls.length === 0) showGameOver();
+                }
+            });
+
+            gameState.powerups.forEach((powerup, index) => {
+                powerup.y += powerup.speed;
+                
+                const paddleTop = gameState.paddle.y;
+                const paddleLeft = gameState.paddle.x;
+                const paddleRight = gameState.paddle.x + gameState.paddle.width;
+                
+                const powerupBottom = powerup.y + powerup.size;
+                const powerupLeft = powerup.x - powerup.size;
+                const powerupRight = powerup.x + powerup.size;
+
+                if(powerupBottom >= paddleTop && 
+                   powerupRight >= paddleLeft &&
+                   powerupLeft <= paddleRight &&
+                   powerup.y < canvas.height) {
+                    activatePowerup(powerup.type);
+                    gameState.powerups.splice(index, 1);
+                }
+
+                const colorMap = {3:'#3498db',5:'#2ecc71',10:'#f1c40f'};
+                ctx.fillStyle = colorMap[powerup.type];
+                ctx.beginPath();
+                ctx.arc(powerup.x, powerup.y, powerup.size, 0, Math.PI*2);
+                ctx.fill();
+                
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 14px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(powerup.type, powerup.x, powerup.y);
+            });
+
+            ctx.fillStyle = '#e74c3c';
+            ctx.fillRect(gameState.paddle.x, gameState.paddle.y, 
+                       gameState.paddle.width, gameState.paddle.height);
+
+            gameState.bricks.forEach(brick => {
+                if(brick.active) {
+                    ctx.fillStyle = brick.color;
+                    ctx.fillRect(brick.x, brick.y, brick.width, brick.height);
+                }
+            });
+
+            if(gameState.bricks.every(brick => !brick.active)) {
+                if(gameState.level < 100) {
+                    gameState.level++;
+                    document.getElementById('level').textContent = gameState.level;
+                    initGame();
+                } else {
+                    alert('恭喜通关！');
+                    gameState.gameActive = false;
+                }
+            }
+
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function showGameOver() {
+            gameState.gameActive = false;
+            document.getElementById('gameOverDialog').style.display = 'block';
+        }
+
+        function restartGame() {
+            cancelAnimationFrame(animationId);
+            document.getElementById('gameOverDialog').style.display = 'none';
+            gameState.level = 1;
+            gameState.gameActive = false;
+            document.getElementById('level').textContent = 1;
+            initGame();
+            gameState.gameActive = true;
+            gameState.paused = false;
+            document.getElementById('controlBtn').textContent = '暂停游戏';
+            gameLoop();
+        }
+
+        const controlBtn = document.getElementById('controlBtn');
+        controlBtn.addEventListener('click', () => {
+            if(!gameState.gameActive) {
+                cancelAnimationFrame(animationId);
+                gameState.gameActive = true;
+                gameState.paused = false;
+                controlBtn.textContent = '暂停游戏';
+                initGame();
+                gameLoop();
+            } else {
+                gameState.paused = !gameState.paused;
+                controlBtn.textContent = gameState.paused ? '继续游戏' : '暂停游戏';
+                if(!gameState.paused) {
+                    cancelAnimationFrame(animationId);
+                    gameLoop();
+                }
+            }
+        });
+
+        const keys = {};
+        window.addEventListener('keydown', e => keys[e.key] = true);
+        window.addEventListener('keyup', e => keys[e.key] = false);
+    </script>
+</body>
+</html>
